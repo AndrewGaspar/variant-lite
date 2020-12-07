@@ -605,6 +605,20 @@ struct is_nothrow_swappable : decltype( detail::is_nothrow_swappable::test<T>(0)
 // detail:
 
 namespace detail {
+#if variant_CPP11_OR_GREATER
+// Resolves to a forwarding reference in C++11 and newer, and a const reference in C++98
+template<typename T>
+using VisitRef = T&&;
+using std::forward;
+#else
+// Resolves to a forwarding reference in C++11 and newer, and a const reference in C++98
+template<typename T>
+typedef T const &VisitRef;
+template<typename T>
+VisitRef<T> forward(VisitRef<T> const &t) {
+    return t;
+}
+#endif
 
 // typelist:
 
@@ -1783,9 +1797,9 @@ template< typename R, typename VT >
 struct VisitorApplicatorImpl
 {
     template< typename Visitor, typename T >
-    static R apply(Visitor const& v, T const& arg)
+    static R apply(VisitRef<Visitor> v, VisitRef<T> arg)
     {
-        return v(arg);
+        return v(forward<T>(arg));
     }
 };
 
@@ -1793,7 +1807,7 @@ template< typename R, typename VT >
 struct VisitorApplicatorImpl<R, TX<VT> >
 {
     template< typename Visitor, typename T >
-    static R apply(Visitor const&, T)
+    static R apply(VisitRef<Visitor>, T)
     {
         // prevent default construction of a const reference, see issue #39:
         std::terminate();
@@ -1817,20 +1831,20 @@ struct TypedVisitorUnwrapper;
 template< typename R, typename Visitor, {% call (i0, i1) SequenceGen(n + 1)%}typename T{{i1 + 1}}{% endcall %} >
 struct TypedVisitorUnwrapper<{{n + 2}}, R, Visitor, {% call (i0, i1) SequenceGen(n + 1)%}T{{i1 + 1}}{% endcall %}>
 {
-    const Visitor& visitor;
-    {% call (i0, i1) SequenceGen(n + 1, '')%}T{{i1 + 1}} const& val{{i1 + 1}};
+    VisitRef<Visitor> visitor;
+    {% call (i0, i1) SequenceGen(n + 1, '')%}VisitRef<T{{i1 + 1}}> val{{i1 + 1}};
     {% endcall %}
-    TypedVisitorUnwrapper(const Visitor& visitor_, {% call (i0, i1) SequenceGen(n + 1)%}T{{i1 + 1}} const& val{{i1 + 1}}_{% endcall %})
-        : visitor(visitor_)
-        {% call (i0, i1) SequenceGen(n + 1, '')%}, val{{i1 + 1}}(val{{i1 + 1}}_)
+    TypedVisitorUnwrapper(VisitRef<Visitor> visitor_, {% call (i0, i1) SequenceGen(n + 1)%}VisitRef<T{{i1 + 1}}> val{{i1 + 1}}_{% endcall %})
+        : visitor(forward<Visitor>(visitor_))
+        {% call (i0, i1) SequenceGen(n + 1, '')%}, val{{i1 + 1}}(forward<T{{i1 + 1}}>(val{{i1 + 1}}_))
         {% endcall %}
     {
     }
 
     template<typename T>
-    R operator()(const T& val1) const
+    R operator()(VisitRef<T> val1) const
     {
-        return visitor(val1, {% call (i0, i1) SequenceGen(n + 1)%}val{{i1 + 1}}{% endcall %});
+        return visitor(forward<T>(val1), {% call (i0, i1) SequenceGen(n + 1)%}forward<T{{i1 + 1}}>(val{{i1 + 1}}){% endcall %});
     }
 };
 
@@ -1839,21 +1853,26 @@ struct TypedVisitorUnwrapper<{{n + 2}}, R, Visitor, {% call (i0, i1) SequenceGen
 template<typename R, typename Visitor, typename V2>
 struct VisitorUnwrapper
 {
-    const Visitor& visitor;
-    const V2& r;
+    VisitRef<Visitor> visitor;
+    VisitRef<V2> r;
 
-    VisitorUnwrapper(const Visitor& visitor_, const V2& r_)
-        : visitor(visitor_)
-        , r(r_)
+    VisitorUnwrapper(VisitRef<Visitor> visitor_, VisitRef<V2> r_)
+        : visitor(forward<Visitor>(visitor_))
+        , r(forward<V2>(r_))
     {
     }
 
     {% for n in range(VisitorArgs) %}
     template< {% call (i0, i1) SequenceGen(n + 1)%}typename T{{i1}}{% endcall %} >
-    R operator()({% call (i0, i1) SequenceGen(n + 1)%}T{{i1}} const& val{{i1}}{% endcall %}) const
+    R operator()({% call (i0, i1) SequenceGen(n + 1)%}VisitRef<T{{i1}}> val{{i1}}{% endcall %}) const
     {
         typedef TypedVisitorUnwrapper<{{n + 2}}, R, Visitor, {% call (i0, i1) SequenceGen(n + 1)%}T{{i1}}{% endcall %}> visitor_type;
-        return VisitorApplicator<R>::apply(visitor_type(visitor, {% call (i0, i1) SequenceGen(n + 1)%}val{{i1}}{% endcall %}), r);
+        return VisitorApplicator<R>::apply(
+            visitor_type(
+                forward<Visitor>(visitor),
+                {% call (i0, i1) SequenceGen(n + 1)%}forward<T{{i1}}>(val{{i1}}){% endcall %}),
+            forward<V2>(r)
+        );
     }
     {% endfor %}
 };
@@ -1863,12 +1882,12 @@ template<typename R>
 struct VisitorApplicator
 {
     template<typename Visitor, typename V1>
-    static R apply(const Visitor& v, const V1& arg)
+    static R apply(VisitRef<Visitor> v, VisitRef<V1> arg)
     {
         switch( arg.index() )
         {
             {% for n in range(NumParams) -%}
-            case {{n}}: return apply_visitor<{{n}}>(v, arg);
+            case {{n}}: return apply_visitor<{{n}}>(forward<Visitor>(v), forward<V1>(arg));
             {% endfor %}
             // prevent default construction of a const reference, see issue #39:
             default: std::terminate();
@@ -1876,7 +1895,7 @@ struct VisitorApplicator
     }
 
     template<size_t Idx, typename Visitor, typename V1>
-    static R apply_visitor(const Visitor& v, const V1& arg)
+    static R apply_visitor(VisitRef<Visitor> v, VisitRef<V1> arg)
     {
 
 #if variant_CPP11_OR_GREATER
@@ -1884,16 +1903,16 @@ struct VisitorApplicator
 #else
         typedef typename variant_alternative<Idx, V1>::type value_type;
 #endif
-        return VisitorApplicatorImpl<R, value_type>::apply(v, get<Idx>(arg));
+        return VisitorApplicatorImpl<R, value_type>::apply(forward<Visitor>(v), get<Idx>(forward<V1>(arg)));
     }
 
 #if variant_CPP11_OR_GREATER
     template<typename Visitor, typename V1, typename V2, typename ... V>
-    static R apply(const Visitor& v, const V1& arg1, const V2& arg2, const V ... args)
+    static R apply(Visitor &&v, V1 &&arg1, V2 &&arg2, V&&... args)
     {
         typedef VisitorUnwrapper<R, Visitor, V1> Unwrapper;
-        Unwrapper unwrapper(v, arg1);
-        return apply(unwrapper, arg2, args ...);
+        Unwrapper unwrapper(std::forward<Visitor>(v), std::forward<V1>(arg1));
+        return apply(unwrapper, std::forward<V2>(arg2), std::forward<V>(args) ...);
     }
 #else
     {% for n in range(VisitorArgs - 1) %}
@@ -1912,7 +1931,7 @@ struct VisitorApplicator
 template< size_t NumVars, typename Visitor, typename ... V >
 struct VisitorImpl
 {
-    typedef decltype(std::declval<Visitor>()(get<0>(static_cast<const V&>(std::declval<V>()))...)) result_type;
+    typedef decltype(std::declval<Visitor>()(get<0>(std::declval<V>())...)) result_type;
     typedef VisitorApplicator<result_type> applicator_type;
 };
 #endif
@@ -1921,10 +1940,10 @@ struct VisitorImpl
 #if variant_CPP11_OR_GREATER
 // No perfect forwarding here in order to simplify code
 template< typename Visitor, typename ... V >
-inline auto visit(Visitor const& v, V const& ... vars) -> typename detail::VisitorImpl<sizeof ... (V), Visitor, V... > ::result_type
+inline auto visit(Visitor &&v, V && ... vars) -> typename detail::VisitorImpl<sizeof ... (V), Visitor, V... > ::result_type
 {
     typedef detail::VisitorImpl<sizeof ... (V), Visitor, V... > impl_type;
-    return impl_type::applicator_type::apply(v, vars...);
+    return impl_type::applicator_type::apply(std::forward<Visitor>(v), std::forward<V>(vars)...);
 }
 #else
 {% for n in range(VisitorArgs) %}

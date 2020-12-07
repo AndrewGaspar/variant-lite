@@ -1205,7 +1205,7 @@ struct RVRefTestVisitor
     template< typename U >
     std::string operator()( U && val) const
     {
-#if variant_USES_STD_VARIANT
+#if variant_USES_STD_VARIANT || defined(variant_CPP11_OR_GREATER)
         std::ostringstream os;
         os << val;
         return os.str();
@@ -1697,6 +1697,86 @@ CASE( "tweak header: reads tweak header if supported " "[tweak]" )
     EXPECT( VARIANT_TWEAK_VALUE == 42 );
 #else
     EXPECT( !!"Tweak header is not available (variant_HAVE_TWEAK_HEADER: 0)." );
+#endif
+}
+
+CASE ("variant: visitors can work with non-const references")
+{
+    nonstd::variant<int, double> x = 1.0;
+    nonstd::visit([](auto &x) { x = 2; }, x);
+    EXPECT(nonstd::get<double>(x) == 2.0);
+}
+
+CASE ("variant: visitors can work with overloaded non-const references")
+{
+    struct Visitor {
+        void operator()(int &x) const {
+            x = 1;
+        }
+        void operator()(double &x) const {
+            x = 2.0;
+        }
+    } visitor;
+
+    nonstd::variant<int, double> x = 0.0;
+    nonstd::visit(visitor, x);
+    EXPECT(nonstd::get<double>(x) == 2.0);
+
+    x = int(1);
+    nonstd::visit(visitor, x);
+    EXPECT(nonstd::get<int>(x) == 1);
+}
+
+CASE("variant: visitors can be non-const")
+{
+    struct Visitor {
+        double sum = 0.0;
+        void operator()(int const x) {
+            sum += x;
+        }
+        void operator()(double const x) {
+            sum += x;
+        }
+    } visitor;
+
+    std::vector< nonstd::variant<int, double> > vec;
+    for (int i = 1; i <= 10; i++) {
+        if (i % 2 == 0) {
+            vec.push_back(double(i));
+        } else {
+            vec.push_back(i);
+        }
+    }
+
+    for (auto const& v : vec) {
+        nonstd::visit(visitor, v);
+    }
+    EXPECT(visitor.sum == 55);
+}
+
+CASE("variant: visitors should be able to move out of a lvalue variant") {
+#if variant_CPP11_OR_GREATER
+    nonstd::variant< std::unique_ptr<int> > v = std::make_unique<int>(7);
+    std::unique_ptr<int> x;
+    nonstd::visit([&](std::unique_ptr<int> &y) { x = std::move(y); }, v);
+    EXPECT(x);
+    EXPECT(*x == 7);
+#else
+    EXPECT(!!"Can't move in C++98");
+#endif
+}
+
+CASE ("variant: visitors should be able to move out of a rvalue variant") {
+#if variant_CPP11_OR_GREATER
+    nonstd::variant< std::unique_ptr<int> > v = std::make_unique<int>(7);
+    std::unique_ptr<int> x;
+    nonstd::visit(
+        [&](std::unique_ptr<int> &&y) { x = std::forward< std::unique_ptr<int> >(y); },
+        std::move(v));
+    EXPECT(x);
+    EXPECT(*x == 7);
+#else
+    EXPECT( !!"Can't move in C++98" );
 #endif
 }
 
